@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3x3 큐브 시뮬레이터</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <style>
+        /* 기본 스타일 */
+        body { margin: 0; overflow: hidden; font-family: 'Inter', sans-serif; background-color: #f0f0f0; }
+        #container { width: 100vw; height: 100vh; display: flex; justify-content: center; align-items: center; flex-direction: column; padding-bottom: 20px; box-sizing: border-box; }
+        #canvas-container { width: 80%; max-width: 600px; height: 55%; /* 높이 약간 줄임 */ margin-bottom: 20px; }
+        canvas { display: block; background-color: #e0e0e0; border-radius: 8px; width: 100%; height: 100%;}
+        #controls-container { display: flex; flex-direction: column; align-items: center; gap: 15px; background-color: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); max-width: 90%; }
+        #action-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: 100%; margin-bottom: 15px;} /* 섞기/되돌리기 버튼 영역 */
+        #rotation-controls { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; width: 100%; }
+        button {
+            padding: 10px 15px;
+            font-size: 14px;
+            font-weight: 600;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background-color 0.3s, transform 0.1s;
+            background-color: #4a90e2;
+            color: white;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            min-width: 70px; /* 최소 너비 약간 줄임 */
+            text-align: center;
+        }
+        button:hover { background-color: #357abd; }
+        button:active { transform: scale(0.95); }
+        button:disabled { background-color: #cccccc; cursor: not-allowed; } /* 비활성화 스타일 */
+
+        /* 면별 색상 버튼 */
+        .u-btn { background-color: #ffffff; color: #333; border: 1px solid #ccc; } .u-btn:hover { background-color: #f0f0f0; }
+        .d-btn { background-color: #ffd700; color: #333; } .d-btn:hover { background-color: #e6c300; }
+        .f-btn { background-color: #009e60; color: white; } .f-btn:hover { background-color: #008a53; }
+        .b-btn { background-color: #0051ba; color: white; } .b-btn:hover { background-color: #004195; }
+        .l-btn { background-color: #ff5800; color: white; } .l-btn:hover { background-color: #e64a00; }
+        .r-btn { background-color: #c41e3a; color: white; } .r-btn:hover { background-color: #ad1a33; }
+        
+        /* 액션 버튼 스타일 */
+        .scramble-btn { background-color: #6a4acd; } .scramble-btn:hover { background-color: #563daf; }
+        .solve-btn { background-color: #2ecc71; } .solve-btn:hover { background-color: #27ae60; } /* 초록색 */
+
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div id="canvas-container"></div>
+        <div id="controls-container">
+             
+            <div id="action-buttons">
+                 
+                <button id="scramble-button" class="scramble-btn" onclick="scrambleCube()">섞기 (Scramble)</button>
+                 
+                <button id="solve-button" class="solve-btn" onclick="solveByReversing()" disabled>되돌리기 (Reverse)</button>
+            </div>
+            <div id="rotation-controls">
+                
+                <button class="u-btn" onclick="applyAndRecordMove('U')">U</button>
+                <button class="u-btn" onclick="applyAndRecordMove('U\'')">U'</button>
+                <button class="d-btn" onclick="applyAndRecordMove('D')">D</button>
+                <button class="d-btn" onclick="applyAndRecordMove('D\'')">D'</button>
+
+                <button class="f-btn" onclick="applyAndRecordMove('F')">F</button>
+                <button class="f-btn" onclick="applyAndRecordMove('F\'')">F'</button>
+                <button class="b-btn" onclick="applyAndRecordMove('B')">B</button>
+                <button class="b-btn" onclick="applyAndRecordMove('B\'')">B'</button>
+
+                <button class="l-btn" onclick="applyAndRecordMove('L')">L</button>
+                <button class="l-btn" onclick="applyAndRecordMove('L\'')">L'</button>
+                <button class="r-btn" onclick="applyAndRecordMove('R')">R</button>
+                <button class="r-btn" onclick="applyAndRecordMove('R\'')">R'</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let scene, camera, renderer, controls;
+        let pieces = [];
+        const pieceSize = 1;
+        const gap = 0.05;
+        const cubeSize = 3;
+
+        let isRotating = false;
+        let rotationQueue = [];
+        let moveHistory = []; // 회전 기록 저장 배열
+
+        const colors = { U: 0xffffff, D: 0xffd700, F: 0x009e60, B: 0x0051ba, L: 0xff5800, R: 0xc41e3a };
+
+        // DOM 요소 참조
+        let solveButton;
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0xf0f0f0);
+
+            const container = document.getElementById('canvas-container');
+            camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, 1000);
+            camera.position.set(4, 4, 5);
+            camera.lookAt(scene.position);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(container.clientWidth, container.clientHeight);
+            container.appendChild(renderer.domElement);
+
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.1;
+            controls.screenSpacePanning = false;
+            controls.minDistance = 5;
+            controls.maxDistance = 20;
+
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+            scene.add(ambientLight);
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.9);
+            directionalLight.position.set(5, 10, 7.5);
+            scene.add(directionalLight);
+
+            createCube();
+
+             // 버튼 요소 가져오기
+            solveButton = document.getElementById('solve-button');
+            updateSolveButtonState(); // 초기 버튼 상태 업데이트
+
+            window.addEventListener('resize', onWindowResize, false);
+            animate();
+        }
+
+        function createCube() {
+            // 이전과 동일한 큐브 생성 로직
+            const totalSize = pieceSize * cubeSize + gap * (cubeSize - 1);
+            const offset = totalSize / 2 - pieceSize / 2;
+            pieces = []; // 배열 초기화
+            // 기존 큐브 제거 (재생성 시)
+            while(scene.children.length > 0){
+                const obj = scene.children[0];
+                if(obj.type === "Mesh") { // 조각만 제거
+                     scene.remove(obj);
+                     if(obj.geometry) obj.geometry.dispose();
+                     // 재질 배열 처리
+                     if(Array.isArray(obj.material)) {
+                         obj.material.forEach(m => m.dispose());
+                     } else if (obj.material) {
+                         obj.material.dispose();
+                     }
+                } else {
+                    scene.remove(obj); // 조명 등 다른 객체 제거
+                }
+            }
+            // 조명 다시 추가
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+            scene.add(ambientLight);
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.9);
+            directionalLight.position.set(5, 10, 7.5);
+            scene.add(directionalLight);
+
+
+            for (let x = 0; x < cubeSize; x++) {
+                for (let y = 0; y < cubeSize; y++) {
+                    for (let z = 0; z < cubeSize; z++) {
+                        if (x > 0 && x < cubeSize - 1 && y > 0 && y < cubeSize - 1 && z > 0 && z < cubeSize - 1) continue;
+
+                        const pieceGeometry = new THREE.BoxGeometry(pieceSize, pieceSize, pieceSize);
+                        const materials = [];
+                        const defaultColor = 0x333333;
+
+                        materials.push(new THREE.MeshStandardMaterial({ color: x === cubeSize - 1 ? colors.R : defaultColor, roughness: 0.7, metalness: 0.1 }));
+                        materials.push(new THREE.MeshStandardMaterial({ color: x === 0 ? colors.L : defaultColor, roughness: 0.7, metalness: 0.1 }));
+                        materials.push(new THREE.MeshStandardMaterial({ color: y === cubeSize - 1 ? colors.U : defaultColor, roughness: 0.7, metalness: 0.1 }));
+                        materials.push(new THREE.MeshStandardMaterial({ color: y === 0 ? colors.D : defaultColor, roughness: 0.7, metalness: 0.1 }));
+                        materials.push(new THREE.MeshStandardMaterial({ color: z === cubeSize - 1 ? colors.F : defaultColor, roughness: 0.7, metalness: 0.1 }));
+                        materials.push(new THREE.MeshStandardMaterial({ color: z === 0 ? colors.B : defaultColor, roughness: 0.7, metalness: 0.1 }));
+
+                        const piece = new THREE.Mesh(pieceGeometry, materials);
+                        piece.position.set( (x * (pieceSize + gap)) - offset, (y * (pieceSize + gap)) - offset, (z * (pieceSize + gap)) - offset );
+                        piece.userData.logicalX = x; piece.userData.logicalY = y; piece.userData.logicalZ = z;
+                        scene.add(piece);
+                        pieces.push(piece);
+                    }
+                }
+            }
+        }
+
+        // 회전 적용 및 기록 함수
+        function applyAndRecordMove(move) {
+            if (isRotating && rotationQueue.length > 50) return;
+
+             // 회전 기록 추가
+            moveHistory.push(move);
+            updateSolveButtonState(); // 버튼 상태 업데이트
+
+            // 회전 큐에 추가하고 실행
+            if (isRotating) {
+                rotationQueue.push(move);
+            } else {
+                rotateFace(move);
+            }
+        }
+
+
+        // 면 회전 함수 (회전 기록 로직은 applyAndRecordMove로 이동)
+        function rotateFace(move) {
+             // isRotating 체크 및 큐 추가 로직은 applyAndRecordMove에서 처리
+            if (isRotating) { // 이미 회전 중이면 큐에만 넣도록 함 (applyAndRecordMove에서 호출 시)
+                 rotationQueue.push(move);
+                 return;
+            }
+            isRotating = true;
+
+
+            const axis = new THREE.Vector3();
+            let layerIndex = -1;
+            let angle = Math.PI / 2;
+            let originalMove = move; // 역회전 계산을 위해 원본 저장
+
+             // 역회전 계산을 위한 move 문자열 처리
+            let baseMove = move;
+            let isPrime = false;
+            let isDouble = false; // 2회전은 아직 미구현
+
+            if (move.endsWith("'")) {
+                baseMove = move.slice(0, -1);
+                angle = -angle;
+                isPrime = true;
+            } else if (move.endsWith("2")) {
+                baseMove = move.slice(0, -1);
+                angle = Math.PI;
+                isDouble = true;
+            }
+
+            const centerOffset = cubeSize / 2 - 0.5;
+
+            switch (baseMove) {
+                case 'U': axis.set(0, 1, 0); layerIndex = cubeSize - 1; angle = -angle; break; // U 회전은 Y축 음수 방향
+                case 'D': axis.set(0, 1, 0); layerIndex = 0; break;             // D 회전은 Y축 양수 방향
+                case 'L': axis.set(1, 0, 0); layerIndex = 0; break;             // L 회전은 X축 양수 방향
+                case 'R': axis.set(1, 0, 0); layerIndex = cubeSize - 1; angle = -angle; break; // R 회전은 X축 음수 방향
+                case 'F': axis.set(0, 0, 1); layerIndex = cubeSize - 1; angle = -angle; break; // F 회전은 Z축 음수 방향
+                case 'B': axis.set(0, 0, 1); layerIndex = 0; break;             // B 회전은 Z축 양수 방향
+                default:
+                    console.error("Unknown face:", baseMove);
+                    isRotating = false;
+                    processNextRotation();
+                    return;
+            }
+             // angle 조정 (isPrime 고려)
+            // U', R', F' 는 angle이 양수가 됨 (원래 angle이 음수였으므로)
+            // D', L', B' 는 angle이 음수가 됨 (원래 angle이 양수였으므로)
+            // 기본 U, R, F 는 angle이 음수
+            // 기본 D, L, B 는 angle이 양수
+            // --> 위 switch 문에서 angle 부호 조정으로 이미 처리됨.
+
+            const piecesToRotate = pieces.filter(p => {
+                let pieceLayerIndex;
+                const pos = p.position;
+                const step = pieceSize + gap;
+                if (axis.x !== 0) pieceLayerIndex = Math.round(pos.x / step + centerOffset);
+                else if (axis.y !== 0) pieceLayerIndex = Math.round(pos.y / step + centerOffset);
+                else if (axis.z !== 0) pieceLayerIndex = Math.round(pos.z / step + centerOffset);
+                return pieceLayerIndex === layerIndex;
+            });
+
+            const rotationGroup = new THREE.Group();
+            scene.add(rotationGroup);
+            piecesToRotate.forEach(p => {
+                p.updateMatrixWorld();
+                rotationGroup.attach(p);
+            });
+
+            const duration = 250;
+            const startTime = Date.now();
+
+            function animateRotation() {
+                const now = Date.now();
+                const elapsed = now - startTime;
+                const progress = Math.min(elapsed / duration, 1);
+                const easedProgress = 1 - Math.pow(1 - progress, 3);
+                const currentAngle = angle * easedProgress;
+
+                rotationGroup.setRotationFromAxisAngle(axis, currentAngle);
+
+                if (progress < 1) {
+                    requestAnimationFrame(animateRotation);
+                } else {
+                    rotationGroup.updateMatrixWorld();
+                    piecesToRotate.forEach(p => {
+                        p.updateMatrixWorld();
+                        scene.attach(p);
+                        const step = pieceSize + gap;
+                        p.position.x = Math.round(p.position.x / step) * step;
+                        p.position.y = Math.round(p.position.y / step) * step;
+                        p.position.z = Math.round(p.position.z / step) * step;
+                    });
+                    scene.remove(rotationGroup);
+                    isRotating = false;
+                    processNextRotation(); // 다음 회전 처리
+                }
+            }
+            requestAnimationFrame(animateRotation);
+        }
+
+        function processNextRotation() {
+            if (rotationQueue.length > 0) {
+                const nextMove = rotationQueue.shift();
+                rotateFace(nextMove); // isRotating 플래그는 rotateFace 내부에서 다시 true로 설정됨
+            } else {
+                 isRotating = false; // 큐가 비면 최종적으로 회전 상태 해제
+                 updateSolveButtonState(); // 큐 비었을 때 버튼 상태 업데이트
+            }
+        }
+
+        // 역회전 계산 함수
+        function getInverseMove(move) {
+            if (move.endsWith("'")) {
+                return move.slice(0, -1); // Prime(') 제거
+            } else if (move.endsWith("2")) {
+                return move; // 2회전의 역은 자기 자신
+            } else {
+                return move + "'"; // Prime(') 추가
+            }
+        }
+
+        // 기록된 회전을 역으로 실행하여 되돌리는 함수
+        function solveByReversing() {
+            if (isRotating || moveHistory.length === 0) return;
+
+            const inverseSequence = [];
+            for (let i = moveHistory.length - 1; i >= 0; i--) {
+                inverseSequence.push(getInverseMove(moveHistory[i]));
+            }
+
+            console.log("Reversing Sequence:", inverseSequence.join(' '));
+
+            // 기존 큐 비우기 (선택적: 현재 진행중인 회전이 있다면 중단할지 결정)
+            // rotationQueue = [];
+
+            // 역회전 시퀀스를 큐에 추가
+            rotationQueue.push(...inverseSequence);
+
+            // 회전 기록 초기화
+            moveHistory = [];
+            updateSolveButtonState(); // 버튼 비활성화
+
+            // 되돌리기 시작
+            if (!isRotating) {
+                 processNextRotation();
+            }
+        }
+
+        // 큐브 섞기 함수 (회전 기록 추가)
+        function scrambleCube() {
+            if (isRotating) return;
+
+            const moves = ['U', 'D', 'L', 'R', 'F', 'B', "U'", "D'", "L'", "R'", "F'", "B'"];
+            const scrambleSequence = [];
+            const numMoves = 20;
+
+            for (let i = 0; i < numMoves; i++) {
+                const randomMove = moves[Math.floor(Math.random() * moves.length)];
+                scrambleSequence.push(randomMove);
+            }
+
+            console.log("Scramble Sequence:", scrambleSequence.join(' '));
+
+            // 섞기 시퀀스를 기록하고 회전 큐에 추가
+            // moveHistory.push(...scrambleSequence); // applyAndRecordMove 에서 기록하므로 중복 제거
+            // rotationQueue.push(...scrambleSequence);
+            scrambleSequence.forEach(move => {
+                applyAndRecordMove(move); // 기록과 큐 추가를 동시에 처리
+            });
+
+
+            // updateSolveButtonState(); // applyAndRecordMove 내부에서 호출됨
+            // 섞기 시작 (큐 처리)
+            // if (!isRotating) { // applyAndRecordMove 에서 이미 시작됨
+            //     processNextRotation();
+            // }
+        }
+
+         // 되돌리기 버튼 활성화/비활성화 업데이트
+        function updateSolveButtonState() {
+             if (solveButton) {
+                solveButton.disabled = moveHistory.length === 0 || isRotating;
+             }
+             // 필요시 다른 버튼들도 회전 중 비활성화 가능
+             const scrambleBtn = document.getElementById('scramble-button');
+             if(scrambleBtn) scrambleBtn.disabled = isRotating;
+             document.querySelectorAll('#rotation-controls button').forEach(btn => btn.disabled = isRotating);
+        }
+
+
+        function onWindowResize() {
+            const container = document.getElementById('canvas-container');
+            if (!container) return;
+            const width = container.clientWidth;
+            const height = container.clientHeight;
+            if (width > 0 && height > 0) {
+                 camera.aspect = width / height;
+                 camera.updateProjectionMatrix();
+                 renderer.setSize(width, height);
+            }
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+             // 회전 중일 때 버튼 상태 업데이트 (선택적: 더 부드러운 비활성화)
+            if(isRotating !== solveButton?.disabled) { // 상태 변경 시에만 업데이트
+                updateSolveButtonState();
+            }
+            renderer.render(scene, camera);
+        }
+
+        window.onload = init;
+
+    </script>
+</body>
+</html>
